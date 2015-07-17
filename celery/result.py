@@ -788,6 +788,7 @@ class GroupResult(ResultSet):
             ...     result = GroupResult.restore(result.id)
 
         """
+        print 'saving group "{}"'.format(self)
         return (backend or self.app.backend).save_group(self.id, self)
 
     def delete(self, backend=None):
@@ -823,6 +824,7 @@ class GroupResult(ResultSet):
     @classmethod
     def restore(self, id, backend=None):
         """Restore previously saved group result."""
+        print 'restore group id="{}"'.format(id)
         return (
             backend or (self.app.backend if self.app else current_app.backend)
         ).restore_group(id)

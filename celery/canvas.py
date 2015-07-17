@@ -214,6 +214,8 @@ class Signature(dict):
             tid = opts['task_id']
         except KeyError:
             tid = opts['task_id'] = _id or uuid()
+            print 'making up a task_id for: "{}" id="{}"'.format(self, tid)
+        # If there was a root_id already don't change it
         root_id = opts.setdefault('root_id', root_id)
         if 'reply_to' not in opts:
             opts['reply_to'] = self.app.oid
@@ -393,7 +395,8 @@ class chain(Signature):
         if self._frozen:
             tasks, results = self._frozen
         else:
-            tasks, results = self.prepare_steps(
+            # Freeze it if we have to do this
+            tasks, results = self._frozen = self.prepare_steps(
                 args, self.tasks, root_id, link_error, app,
                 task_id, group_id, chord,
             )
@@ -406,8 +409,17 @@ class chain(Signature):
             return results[-1]
 
     def freeze(self, _id=None, group_id=None, chord=None, root_id=None):
+        print 'freezing (was no args): {}, but have args "{}"'.format(self, self.args)
+        # I think this is why the first arg is getting lost when the chain starts a group
         _, results = self._frozen = self.prepare_steps(
-            (), self.tasks, root_id, None, self.app, _id, group_id, chord,
+            self.args or (),
+            self.tasks,
+            root_id,
+            None,
+            self.app,
+            _id,
+            group_id,
+            chord,
         )
         return results[-1]
 
@@ -426,6 +438,7 @@ class chain(Signature):
             if not isinstance(task, Signature):
                 task = from_dict(task, app=app)
             if isinstance(task, group):
+                # Group of single task becomes just the task
                 task = maybe_unroll_group(task)
 
             # first task gets partial args from chain
@@ -450,7 +463,9 @@ class chain(Signature):
                     pass  # no callback, so keep as group.
 
             if steps:
+                # Get an async result, make a new task_id
                 res = task.freeze(root_id=root_id)
+                print 'freezing task: {}'.format(res)
             else:
                 # chain(task_id=id) means task id is set for the last task
                 # in the chain.  If the chord is part of a chord/group
@@ -459,17 +474,25 @@ class chain(Signature):
                 # chord callback for the last task.
                 res = task.freeze(
                     last_task_id,
-                    root_id=root_id, group_id=group_id, chord=chord_body,
+                    root_id=root_id,
+                    group_id=group_id,
+                    chord=chord_body,
                 )
+                print 'freezing last task: {}'.format(res)
             root_id = res.id if root_id is None else root_id
             i += 1
 
             if prev_task:
                 # link previous task to this task.
+                print 'link {} to {}'.format(prev_task, task)
                 prev_task.link(task)
                 # set AsyncResult.parent
                 if not res.parent:
+                    print 'set res.parent: res="{}", parent="{}"'.format(res, prev_res)
                     res.parent = prev_res
+                else:
+                    print 'dont change res.parent: res="{}", current_parent="{}" new="{}"'.format(
+                        res, res.parent, prev_res)
 
             if link_error:
                 task.set(link_error=link_error)
@@ -627,6 +650,7 @@ class group(Signature):
 
     def _prepared(self, tasks, partial_args, group_id, root_id, app, dict=dict,
                   Signature=Signature, from_dict=Signature.from_dict):
+        print 'preparing: {} with args {}'.format(self, partial_args)
         for task in tasks:
             if isinstance(task, dict):
                 if isinstance(task, Signature):
@@ -720,10 +744,14 @@ class group(Signature):
         return self.apply_async(partial_args, **options)
 
     def _freeze_unroll(self, new_tasks, group_id, chord, root_id):
+        """Generates the result objects, while mutating new_tasks"""
+        # FIXME - seems like a bad idea to mutate a list while inside a generator.
         stack = deque(self.tasks)
         while stack:
             task = maybe_signature(stack.popleft(), app=self._app).clone()
             if isinstance(task, group):
+                # Order in a group doesn't matter
+                # Un-nest members of a group in a group
                 stack.extendleft(task.tasks)
             else:
                 new_tasks.append(task)
@@ -736,10 +764,12 @@ class group(Signature):
             gid = opts['task_id']
         except KeyError:
             gid = opts['task_id'] = uuid()
+            print 'Making a new group task_id for: "{}" id="{}"'.format(self, gid)
         if group_id:
             opts['group_id'] = group_id
         if chord:
             opts['chord'] = chord
+        # Set root_id only if not set
         root_id = opts.setdefault('root_id', root_id)
         new_tasks = []
         # Need to unroll subgroups early so that chord gets the
